@@ -21,7 +21,7 @@ The tool consists of three components that can be used independently or together
 - pandas (for LSTM integration only)
 - scikit-learn (for LSTM integration only)
 - matplotlib (for LSTM integration only)
-- RealPaver (optional, only needed for the meta-loop; download from https://music.r3music.com/music-projects/realpaver/)
+- RealPaver (optional, only needed for the meta-loop; download from )
 
 No GPU required. All scripts run on CPU. Tested on Google Colab.
 
