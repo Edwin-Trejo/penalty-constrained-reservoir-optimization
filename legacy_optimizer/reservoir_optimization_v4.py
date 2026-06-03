@@ -13,7 +13,8 @@ Changes from v3:
 import numpy as np
 import csv
 import time
-import re
+
+np.random.seed(42)
 
 # ============================================================
 # DATA LOADING
@@ -39,80 +40,6 @@ def load_evaporation(filepath):
                 # Convert mm/hr to m³/s: mm/hr * area_m2 / 1000 / 3600
                 evap[key] = float(r[4]) * AREA_M2 / 1000.0 / 3600.0
     return evap
-
-def find_windows(data, n_windows=10):
-    """Find valid 24-hour optimization windows in the dataset."""
-    windows = []
-    for s in range(6000, len(data) - 24, 24 * 7):
-        Qs = [data[s + t]['discharge'] for t in range(24)]
-        gen = sum(data[s + t]['power'] for t in range(24))
-        if gen > 200 and np.mean(Qs) > 20:
-            windows.append(s)
-            if len(windows) >= n_windows:
-                break
-    return windows
-
-def get_midnight_index(data):
-    """Return dict mapping datetime.date -> record index for every midnight record."""
-    import datetime
-    result = {}
-    for i, rec in enumerate(data):
-        if i + 25 >= len(data):
-            break
-        ts = parse_timestamp(rec['time'])
-        if ts and ts[3] == 0:  # hour == 0 (midnight)
-            year, month, day, _ = ts
-            try:
-                d = datetime.date(year, month, day)
-                result[d] = i
-            except ValueError:
-                pass
-    return result
-
-def load_realpaver_solution(filepath):
-    """
-    Parse a RealPaver output file and return a 24-element array of discharge
-    values in m³/s. Computes the midpoint of the envelope of all outer boxes.
-    """
-    content = None
-    for enc in ['utf-16', 'utf-8', 'latin-1']:
-        try:
-            with open(filepath, 'r', encoding=enc) as f:
-                content = f.read()
-            break
-        except Exception:
-            continue
-    if content is None:
-        raise ValueError(f"Could not read {filepath} with any supported encoding")
-
-    pattern = r'R(\d+)\s+in\s+\[([0-9.eE+-]+)\s*,\s*([0-9.eE+-]+)\]'
-    sections = content.split('OUTER BOX')
-    if len(sections) < 2:
-        sections = content.split('INNER BOX')
-    if len(sections) < 2:
-        raise ValueError(f"No OUTER BOX or INNER BOX found in {filepath}")
-
-    bounds = {}
-    for section in sections[1:]:
-        for m in re.finditer(pattern, section):
-            var = int(m.group(1))
-            low, high = float(m.group(2)), float(m.group(3))
-            if var not in bounds:
-                bounds[var] = {'lo': low, 'hi': high}
-            else:
-                bounds[var]['lo'] = min(bounds[var]['lo'], low)
-                bounds[var]['hi'] = max(bounds[var]['hi'], high)
-
-    if not bounds:
-        raise ValueError(f"No R variables found in {filepath}")
-
-    n_vars = max(bounds.keys())
-    solution = np.zeros(n_vars)
-    for i in range(1, n_vars + 1):
-        b = bounds[i]
-        midpoint_tcm = (b['lo'] + b['hi']) / 2.0
-        solution[i - 1] = midpoint_tcm / 3.6  # TCM/hr → m³/s
-    return solution
 
 def parse_timestamp(ts):
     """Parse '9/14/12 0:00' -> (year, month, day, hour)."""
@@ -142,11 +69,7 @@ PRICES = np.array([25,22,20,20,22,30,45,55,65,70,70,65,60,65,75,80,85,80,70,55,4
 # RESERVOIR MODEL v4
 # ============================================================
 class ReservoirV4:
-    def __init__(self, data, start_idx, evap_dict=None, horizon=24,
-                 objective_mode='revenue', target_release_tcm=None,
-                 level_band=1.5, ramp_max=40.0, demand_tol_pct=0.20,
-                 prices=None, q_min=2.0, q_max=273.0,
-                 s_end_tol=2000.0, min_gen_pct=0.50):
+    def __init__(self, data, start_idx, evap_dict=None, horizon=24):
         self.horizon = horizon
         self.tailwater = 273.4
         self.eta = 0.976
@@ -178,17 +101,19 @@ class ReservoirV4:
         # Historical data
         self.actual_Q = np.array([data[start_idx+t]['discharge'] for t in range(horizon)])
         self.actual_P = np.array([data[start_idx+t]['power'] for t in range(horizon)])
-        self.prices = np.array(prices)[:horizon] if prices is not None else PRICES[:horizon]
+        self.prices = PRICES[:horizon]
 
         # ============================================================
         # DATA-CALIBRATED CONSTRAINTS
         # ============================================================
 
         # Release bounds (from physical turbine limits)
-        self.Q_min = q_min         # m³/s environmental minimum
-        self.Q_max = q_max         # m³/s turbine capacity
+        self.Q_min = 2.0           # m³/s environmental minimum
+        self.Q_max = 273.0         # m³/s turbine capacity
 
-        # Storage band
+        # Storage band: stay within ±1.5m of starting level
+        # This is tight enough to bind but achievable
+        level_band = 1.5  # meters
         self.L_min = self.L0 - level_band
         self.L_max = self.L0 + level_band
         self.S_min = l2s(self.L_min)
@@ -196,21 +121,18 @@ class ReservoirV4:
 
         # Demand target: based on actual daily release for this window
         actual_total_tcm = sum(self.actual_Q) * self.dt / 1000.0
+        # Target: similar to actual, ± 20% tolerance
         self.demand_target = actual_total_tcm
-        self.demand_tolerance = max(actual_total_tcm * demand_tol_pct, 500)
+        self.demand_tolerance = max(actual_total_tcm * 0.20, 500)
 
-        # End storage tolerance
-        self.S_end_tol = s_end_tol
+        # End storage: within 2,000 TCM of start
+        self.S_end_tol = 2000.0
 
-        # Ramp rate
-        self.ramp_max = ramp_max
+        # Ramp rate: 40 m³/s per hour
+        self.ramp_max = 40.0
 
-        # Minimum total generation
-        self.min_gen = sum(self.actual_P) * min_gen_pct
-
-        # Objective configuration
-        self.objective_mode = objective_mode
-        self.target_release_tcm = target_release_tcm if target_release_tcm is not None else self.demand_target
+        # Minimum total generation: at least 50% of actual
+        self.min_gen = sum(self.actual_P) * 0.5
 
         self.n_vars = horizon
 
@@ -235,15 +157,7 @@ class ReservoirV4:
         return np.sum(Q) * self.dt / 1000.0
 
     def objective(self, Q):
-        if self.objective_mode == 'power':
-            P, _, _ = self.compute_power(Q)
-            return -float(np.sum(P))
-        elif self.objective_mode == 'target_release':
-            total = self.total_release_tcm(Q)
-            return (total - self.target_release_tcm) ** 2
-        elif self.objective_mode == 'min_release':
-            return self.total_release_tcm(Q)
-        return -self.revenue(Q)  # default: maximize revenue
+        return -self.revenue(Q)
 
     def constraint_violations(self, Q):
         P, L, H = self.compute_power(Q)
@@ -334,16 +248,13 @@ def num_grad(model, Q, lam, ptype):
     return grad
 
 
-def optimize(model, method='baseline', ptype='L1', max_iters=10000, init_Q=None):
+def optimize(model, method='baseline', ptype='L1', max_iters=10000):
     n = model.horizon
-    if init_Q is not None:
-        Q = np.array(init_Q).copy() + np.random.randn(n) * 1.0
-    else:
-        Q = model.actual_Q.copy() + np.random.randn(n) * 2.0
+    Q = model.actual_Q.copy() + np.random.randn(n) * 2.0
     Q = np.clip(Q, model.Q_min, model.Q_max)
 
     opt = AdamOpt(lr=0.3)
-    lam = 1.0; best_Q = Q.copy(); best_val = -1e30
+    lam = 1.0; best_Q = Q.copy(); best_rev = -1e30
     prev_viol = model.total_violation(Q)
     init_viol = max(prev_viol, 1e-10)
     w_viol = 5.0
@@ -357,9 +268,8 @@ def optimize(model, method='baseline', ptype='L1', max_iters=10000, init_Q=None)
         Q = np.clip(Q, model.Q_min, model.Q_max)
 
         if model.is_feasible(Q):
-            # Negate objective so "higher = better" for all modes
-            val = -model.objective(Q)
-            if val > best_val: best_val = val; best_Q = Q.copy()
+            rev = model.revenue(Q)
+            if rev > best_rev: best_rev = rev; best_Q = Q.copy()
 
         if (it+1) % 500 == 0:
             cv = model.total_violation(Q)
@@ -389,25 +299,32 @@ def optimize(model, method='baseline', ptype='L1', max_iters=10000, init_Q=None)
 
             prev_viol = cv; lam = min(lam, 1e8)
 
-    return best_Q if best_val > -1e30 else Q
+    return best_Q if best_rev > -1e30 else Q
 
 
 # ============================================================
 # MAIN
 # ============================================================
 if __name__ == '__main__':
-    np.random.seed(42)
     print("="*90)
     print("  WATER RESERVOIR OPTIMIZATION v4 — WITH EVAPORATION LOSSES")
     print("="*90)
 
-    data = load_data('data/hydropower_hourly.csv')
+    data = load_data('/content/hydropower_hourly.csv')
     print(f"Loaded {len(data)} hydropower records")
 
-    evap_dict = load_evaporation('data/hourly_evaporation_empirical_overwater_updated.csv')
+    evap_dict = load_evaporation('/content/hourly_evaporation_empirical_overwater_updated.csv')
     print(f"Loaded {len(evap_dict)} evaporation records")
 
-    windows = find_windows(data, n_windows=5)
+    # Find good test windows (active generation, moderate releases)
+    windows = []
+    for s in range(6000, len(data)-24, 24*7):
+        Qs = [data[s+t]['discharge'] for t in range(24)]
+        gen = sum(data[s+t]['power'] for t in range(24))
+        avg_q = np.mean(Qs)
+        if gen > 200 and avg_q > 20:
+            windows.append(s)
+            if len(windows) >= 5: break
 
     print(f"Test windows: {len(windows)}")
 

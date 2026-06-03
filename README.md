@@ -1,266 +1,378 @@
-# Reservoir Release Optimization Tool
+# Reservoir Release Optimizer
 
-Penalty-based constrained optimization for hydropower reservoir water release scheduling. This tool finds release schedules that maximize energy revenue while satisfying physical and operational constraints.
+A web-based tool that finds optimal hourly water release schedules for hydropower reservoir operations. Given historical data for a 24-hour planning window, the optimizer determines how much water to release each hour to maximize revenue, maximize power generation, meet a target release volume, or minimize water use — while satisfying all physical and operational constraints.
 
 Developed by Edwin Trejo as part of an MS thesis at the University of Texas at El Paso, Department of Computer Science. Advised by Dr. Martine Ceberio.
 
-## Overview
+---
 
-The tool consists of three components that can be used independently or together:
+## Prerequisites
 
-1. **Standalone Optimizer** (`reservoir_optimization_v4.py`): Runs the penalty-based optimizer directly on reservoir data. No external tools required.
+- **Python 3.8 or higher** — download from [python.org](https://www.python.org/downloads/).
+  - **Windows:** During installation, check **"Add Python to PATH"**.
+  - **Mac:** Python 3 is typically pre-installed. Run `python3 --version` in Terminal to confirm. If missing, install from [python.org](https://www.python.org/downloads/) or run `brew install python`.
+- No GPU required. The optimizer runs entirely on CPU.
 
-2. **Meta-Loop with RealPaver** (`generate_realpaver.py` + `reservoir_metaloop_poc.py`): Combines the interval constraint solver RealPaver with the penalty optimizer. RealPaver analyzes constraints and finds guaranteed feasible solutions. The optimizer searches for higher-revenue schedules. A coordinator selects the best feasible result.
+---
 
-3. **LSTM Integration** (`lstm_penalty_integration.py`): Integrates penalty strategies into the DOF-LSTM neural network training loop for constraint-aware time series prediction.
+## Installation
 
-## Requirements
+### Step 1 — Place your data files
 
-- Python 3.8 or higher
-- NumPy
-- pandas (for LSTM integration only)
-- scikit-learn (for LSTM integration only)
-- matplotlib (for LSTM integration only)
-- RealPaver (optional, only needed for the meta-loop; download from )
+Put the two CSV files in the `data/` folder inside this project:
 
-No GPU required. All scripts run on CPU. Tested on Google Colab.
+```
+data/
+    hydropower_hourly.csv
+    hourly_evaporation_empirical_overwater_updated.csv
+```
+
+The app will load these automatically when it starts. See [Data Files](#data-files) below for the required format.
+
+### Step 2 — Run the setup script
+
+**Windows** — Double-click **`setup.bat`**.
+
+**Mac / Linux** — Open Terminal, navigate to this folder, and run:
+
+```bash
+bash setup.sh
+```
+
+The setup script will:
+1. Create a Python virtual environment called `myenv/`
+2. Install all required packages from `requirements.txt`
+
+This only needs to be done once.
+
+You can also do this manually:
+
+**Windows (Command Prompt):**
+```bat
+python -m venv myenv
+myenv\Scripts\activate
+pip install -r requirements.txt
+```
+
+**Mac / Linux (Terminal):**
+```bash
+python3 -m venv myenv
+source myenv/bin/activate
+pip install -r requirements.txt
+```
+
+### Step 3 — Launch the app
+
+**Windows** — Double-click **`run.bat`**.
+
+**Mac / Linux** — In Terminal:
+```bash
+bash run.sh
+```
+
+A browser window will open automatically at `http://localhost:8501`.
+
+To launch manually:
+
+**Windows:**
+```bat
+myenv\Scripts\activate
+streamlit run app.py
+```
+
+**Mac / Linux:**
+```bash
+source myenv/bin/activate
+streamlit run app.py
+```
+
+---
 
 ## Data Files
 
-The tool expects two CSV files:
+The app expects two CSV files in the `data/` folder.
 
-**hydropower_hourly.csv** (required): Hourly reservoir operational records with columns:
-- Start of Interval (UTC-06:00): timestamp
-- End of Interval (UTC-06:00): timestamp
-- Reservoir_water_level(m): float
-- Discharge_Value (m^3/s): float
-- Head(m): float
-- Hydropower_Generation(MW): float or string
+### hydropower_hourly.csv (required)
 
-**hourly_evaporation_empirical_overwater_updated.csv** (optional): Hourly evaporation data with columns:
-- Year: integer
-- Month: integer
-- Day: integer
-- Hour: integer
-- Evap_mm_hr: float
+Hourly reservoir operational records. Columns (in order):
 
-For the LSTM integration, a separate USIBWC discharge CSV is used (see LSTM section below).
+| Column | Description |
+|--------|-------------|
+| Start of Interval (UTC-06:00) | Timestamp, e.g. `9/14/12 0:00` |
+| End of Interval (UTC-06:00) | Timestamp (not used) |
+| Reservoir_water_level(m) | Water surface elevation in meters |
+| Discharge_Value (m³/s) | Actual release in cubic meters per second |
+| Head(m) | Hydraulic head (not used directly) |
+| Hydropower_Generation(MW) | Actual power output in megawatts |
 
-## Quick Start: Standalone Optimizer
+### hourly_evaporation_empirical_overwater_updated.csv (required)
 
-This is the simplest way to use the tool. No RealPaver needed.
+Hourly evaporation data. Columns (in order):
 
-### Step 1: Upload data to Google Colab
+| Column | Description |
+|--------|-------------|
+| Year | Integer year |
+| Month | Integer month (1–12) |
+| Day | Integer day |
+| Hour | Integer hour (0–23) |
+| Evap_mm_hr | Evaporation rate in mm/hour |
 
-Upload `hydropower_hourly.csv` and `hourly_evaporation_empirical_overwater_updated.csv` to your Colab environment.
+If evaporation data is not available for a given hour, that hour is treated as zero evaporation.
 
-### Step 2: Update file paths
+---
 
-Open `reservoir_optimization_v4.py` and update the two file paths in the main section:
+## Using the App
 
-```python
-data = load_data('/content/hydropower_hourly.csv')
-evap_dict = load_evaporation('/content/hourly_evaporation_empirical_overwater_updated.csv')
-```
+When you launch the app, data loads automatically from the `data/` folder. The sidebar shows how many records were loaded. You then configure a run and click **Run Optimization**.
 
-### Step 3: Run
+### Sidebar
 
-```
-python reservoir_optimization_v4.py
-```
+**Data Files** — If you want to use different CSV files, type the new file paths here and click **Load Data**.
 
-### What it does
+**RealPaver Warm Start** — Advanced option. If you have run the RealPaver interval constraint solver on a window and have its output file, upload it here. The optimizer will start from the RealPaver feasible point instead of historical data. This can improve feasibility when the optimizer has trouble satisfying all constraints on its own. See [Using RealPaver](#using-realpaver) below.
 
-The script selects five 24-hour test windows from the data where the reservoir was actively generating power. For each window, it runs three penalty strategies (baseline, adaptive, learnable) with two penalty types (L1, L2) and compares the optimized schedule against the actual historical operations.
+---
 
-### Output
+### Time Window
 
-For each test window and configuration, the script prints:
-- Revenue comparison (actual vs optimized)
-- Whether the optimized schedule is feasible (satisfies all 75 constraints)
-- Total constraint violation
-- Number of constraints satisfied
+The optimizer works on one 24-hour period at a time. You choose which period to plan.
 
-For the best feasible result, it prints an hour-by-hour schedule showing discharge, power, revenue, reservoir level, evaporation, and ramp rate at each hour.
+**Recommended windows** — A pre-filtered list of periods where the reservoir was actively generating power (>200 MWh) and had significant discharge (>20 m³/s). These are spaced roughly one week apart to give a representative spread across the dataset.
 
-## Meta-Loop: Optimizer + RealPaver
+**Pick any date** — Use the calendar to select any date in the dataset. A warning appears if the selected period has low power generation, which may make the optimization results less meaningful.
 
-This approach adds RealPaver as a constraint analysis layer. RealPaver finds guaranteed feasible solutions that serve as starting points and fallbacks for the optimizer.
+---
 
-### Step 1: Generate the RealPaver constraint file
+### Optimization Objective
 
-Upload the data CSVs to Colab. Update the file paths at the top of `generate_realpaver.py`:
+Choose what the optimizer should try to achieve:
 
-```python
-HYDROPOWER_FILE = '/content/hydropower_hourly.csv'
-EVAP_FILE = '/content/hourly_evaporation_empirical_overwater_updated.csv'
-```
+| Objective | Description |
+|-----------|-------------|
+| **Maximize Revenue ($)** | Finds the release schedule that earns the most money given the hourly electricity prices. Higher releases during expensive hours (afternoon peak) earn more. |
+| **Maximize Power Generation (MWh)** | Finds the schedule that produces the most total energy, ignoring electricity price signals. Useful when the goal is energy production rather than revenue. |
+| **Meet a Target Water Release (TCM)** | You enter a total release volume (in thousand cubic meters) for the day, and the optimizer finds the hourly schedule that gets as close to that target as possible. The historical release for the selected window is shown as a reference. |
+| **Minimize Water Release (Conservation)** | Finds the schedule that uses the least water while still satisfying all physical constraints. Useful for drought or conservation planning. |
 
-Run it with a window index (0 through 4):
+---
 
-```
+### Electricity Prices ($/MWh)
+
+Sets the hourly electricity price used when calculating revenue. This affects the **Maximize Revenue** objective and the revenue figures shown in results for all objectives.
+
+| Option | Description |
+|--------|-------------|
+| **Default (ERCOT-style)** | A typical day-ahead price curve: low overnight (~$20–25/MWh), rising through the morning, peaking in late afternoon (~$85/MWh at 5pm). |
+| **Flat rate** | A single price applied to all 24 hours. Enter the price in $/MWh. |
+| **Custom (24-hour)** | Enter a different price for each hour individually. |
+| **Upload CSV** | Upload a CSV file with 24 price values (one per row, or all in one row, no header). |
+
+A bar chart preview shows the price curve for the current selection.
+
+---
+
+### Advanced Settings
+
+#### Physical Constraints
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| **Level band (±m)** | 1.5 m | The reservoir water level must stay within this range above or below the starting level for the window. Wider band = more flexibility for the optimizer. |
+| **Max ramp rate (m³/s per hour)** | 40 m³/s | The maximum allowed change in discharge between consecutive hours. Prevents sudden surges that could damage turbine equipment. |
+| **Demand tolerance (%)** | 20% | The optimizer's total daily release must be within this percentage of the historical release for the same period. |
+
+#### Optimizer Settings
+
+**Penalty update method** — Controls how the optimizer increases the penalty on constraint violations when a solution is infeasible.
+
+| Method | Description | When to use |
+|--------|-------------|-------------|
+| **Adaptive** | Adjusts the penalty based on how fast violations are shrinking. If violations drop quickly, it increases the penalty gently; if they are stuck, it increases aggressively. | Good default for most cases. |
+| **Learnable** | Tracks the rate of change of violations over time and adjusts both the penalty and its update weights dynamically. The most sophisticated method. | Use when Adaptive produces infeasible results. Slower (~5–10% more time). |
+| **Baseline** | Multiplies the penalty by 10 at fixed intervals. Simple and predictable. | Use for comparison or when other methods behave unexpectedly. |
+
+**Penalty type** — Controls the mathematical form of the penalty function.
+
+| Type | Description | When to use |
+|------|-------------|-------------|
+| **L1** | Penalizes the sum of violations linearly. Produces a constant gradient near constraint boundaries, which can drive the solution feasible quickly. | Good default. Usually faster. |
+| **L2** | Penalizes the sum of squared violations. Gradient is proportional to violation size, giving smoother convergence but losing enforcement strength near the boundary. | Try if L1 leaves small residual violations. |
+
+---
+
+### Run Optimization
+
+Click **Run Optimization**. The optimizer runs for approximately 8,000 iterations, which typically takes 20–40 seconds depending on your computer. A spinner shows while it is running.
+
+---
+
+### Results
+
+After the run completes, four summary metrics are shown:
+
+| Metric | Description |
+|--------|-------------|
+| **Revenue** | Total electricity revenue for the optimized schedule. Delta shows the change vs. the actual historical operations. |
+| **Total Release** | Total water released over the 24 hours in thousand cubic meters (TCM). A negative delta means less water released than historical. |
+| **Power Generated** | Total power produced in megawatt-hours (MWh). |
+| **Constraints** | How many of the 75 physical constraints are satisfied. "Feasible" means all constraints are met. |
+
+A feasibility warning appears if the solution violates any constraints, along with a suggestion to try relaxing the Advanced Settings.
+
+**Hourly Schedule table** — Shows every hour of the planned day:
+
+| Column | Description |
+|--------|-------------|
+| Hour | Hour of day (0 = midnight, 12 = noon) |
+| Price ($/MWh) | Electricity price for that hour |
+| Actual Release (m³/s) | What actually happened historically |
+| Optimal Release (m³/s) | The optimizer's recommended release |
+| Actual Power (MW) | Historical power output |
+| Optimal Power (MW) | Projected power output with the optimized release |
+| Water Level (m) | Projected reservoir level at the start of each hour |
+| Evaporation (m³/s) | Evaporative loss during that hour |
+| Ramp (m³/s) | Change in release from the previous hour (positive = increase) |
+| Hourly Revenue ($) | Revenue earned during that hour with the optimized release |
+
+**Download Schedule as CSV** — Saves the hourly table to a CSV file named after the selected window.
+
+**Constraint Details** — Expandable section showing the exact constraint values used for the run.
+
+---
+
+## Constraints Reference
+
+The optimizer enforces 75 constraints per 24-hour window. Release bounds (minimum and maximum discharge) are enforced by clipping after each gradient step. All other constraints are enforced through the penalty function.
+
+All values shown are defaults. Every constraint can be adjusted in the **Advanced Settings** section of the app.
+
+| Constraint | Count | Default | Configurable | Description |
+|------------|-------|---------|--------------|-------------|
+| Release minimum | 24 | 2.0 m³/s | Yes | Environmental flow — minimum discharge required every hour |
+| Release maximum | 24 | 273.0 m³/s | Yes | Turbine capacity — maximum discharge allowed per hour |
+| Level bounds | 48 | ±1.5 m | Yes | Reservoir level must stay within the band around the starting level |
+| Demand | 2 | ±20% | Yes | Total daily release must be within tolerance of the historical release |
+| Ramp rate | 23 | 40 m³/s/hr | Yes | Maximum change in discharge between any two consecutive hours |
+| End storage | 1 | ±2,000 TCM | Yes | End-of-day storage must be within this amount of the starting storage |
+| Min generation | 1 | 50% of historical | Yes | Total power produced must meet this percentage of historical output |
+
+---
+
+## Using RealPaver
+
+RealPaver is an interval constraint solver that guarantees a feasible solution by mathematically proving that a point satisfies all constraints. It is used as a warm start — giving the optimizer a good starting point — and as a fallback when the optimizer cannot find a feasible solution on its own.
+
+### Step 1 — Generate the constraint file
+
+Run the following command in a terminal (with the virtual environment active):
+
+```bat
 python generate_realpaver.py 0
 ```
 
-This produces a file called `reservoir_window_0.txt` containing the constraint problem in RealPaver format.
+Replace `0` with the window index (0–9) matching the window you want to optimize. This creates a file called `reservoir_window_0.txt` in the project folder.
 
-### Step 2: Run RealPaver
+### Step 2 — Run RealPaver
 
-Download `reservoir_window_0.txt` from Colab to your local machine. Open it in RealPaver and run the solver. Save the output file (for example, as `reservoir_window_0_results.txt`).
+Run RealPaver on the constraint file:
 
-### Step 3: Run the meta-loop optimizer
-
-Upload the RealPaver output file to Colab. Open `reservoir_metaloop_poc.py` and update three file paths:
-
-```python
-data = load_data('/content/hydropower_hourly.csv')
-evap_dict = load_evaporation('/content/hourly_evaporation_empirical_overwater_updated.csv')
-REALPAVER_FILE = '/content/reservoir_window_0_results.txt'
+```bat
+Realpaver\realpaver.exe reservoir_window_0.txt > reservoir_window_0_results.txt
 ```
 
-Run it:
+This produces a results file containing boxes of feasible solutions.
 
-```
-python reservoir_metaloop_poc.py
-```
+### Step 3 — Upload to the app
 
-### What it does
+In the app sidebar, expand **RealPaver Warm Start** and upload `reservoir_window_0_results.txt`. The app will parse the file and activate the warm start for the next run.
 
-The script automatically reads the RealPaver output file and extracts the feasible solution. It handles both UTF-16 and UTF-8 encoded files and parses outer boxes or inner boxes.
+> **Important:** A RealPaver results file is specific to the window it was generated for. Always match the uploaded file to the selected time window in the app.
 
-It then runs each penalty strategy twice: once starting from the actual historical discharge, and once starting from the RealPaver solution. A coordinator examines all candidate solutions and selects the one with the highest revenue among those that are feasible.
+---
 
-### Output
+## How the Optimizer Works
 
-The script prints:
-- RealPaver solution feasibility check
-- Results for all strategies with both starting points
-- Side-by-side comparison table
-- Coordinator selections showing which starting point won for each strategy
-- Hour-by-hour schedule for the best result
+The optimizer uses **penalty-based constrained optimization** with Adam gradient descent.
 
-## Changing Constraints
+The problem: find 24 release values Q₁…Q₂₄ that optimize an objective (revenue, power, etc.) while satisfying 75 constraints.
 
-All constraint values are defined in one place in each file. To change them, modify the values in the `ReservoirV4.__init__` method:
+**Approach:**
+1. Start from an initial guess (historical releases, with a small random perturbation).
+2. Reformulate the constrained problem as an unconstrained one by adding a penalty term:  
+   `F(Q) = objective(Q) + λ × penalty(Q)`  
+   where `penalty(Q)` is zero when all constraints are satisfied and positive otherwise.
+3. Run Adam gradient descent to minimize F(Q) iteratively.
+4. Gradually increase λ (the penalty weight) when the solution remains infeasible, forcing the optimizer to prioritize constraint satisfaction.
+5. Track the best feasible solution found throughout the process.
 
-```python
-self.Q_min = 2.0           # minimum discharge (m^3/s)
-self.Q_max = 273.0         # maximum discharge (m^3/s)
-level_band = 1.5           # reservoir level tolerance (meters)
-self.ramp_max = 60.0       # max discharge change per hour (m^3/s)
-self.S_end_tol = 5000.0    # end-of-day storage tolerance (TCM)
-self.demand_tolerance = max(actual_total_tcm * 0.20, 500)  # demand tolerance
-self.min_gen = sum(self.actual_P) * 0.5  # minimum generation (MWh)
-```
+**Water balance model:**  
+At each hour, the reservoir level changes according to:  
+`Level(t+1) = Level(t) + (Inflow(t) − Release(t) − Evaporation(t)) × Δt / Area`
 
-If you are using the meta-loop, you must also update the same values in `generate_realpaver.py` so that RealPaver and the optimizer use identical constraints:
+Inflows are estimated from historical data using the inverse water balance. Evaporation is loaded from the empirical evaporation dataset.
 
-```python
-Q_min_ms = 2.0        # must match self.Q_min
-Q_max_ms = 273.0      # must match self.Q_max
-ramp_max_ms = 60.0    # must match self.ramp_max
-S_end_min = S0 - 5000.0  # must match self.S_end_tol
-S_end_max = S0 + 5000.0  # must match self.S_end_tol
-```
+**Power generation model:**  
+`Power(t) = η × ρ × g × Release(t) × Head(t) / 10⁶`  
+where η = 0.976 (turbine efficiency), ρ = 1000 kg/m³, g = 9.81 m/s².
 
-Both files must use the same constraint values. If they do not match, the RealPaver solution may not be feasible under the optimizer's constraints.
-
-## LSTM Integration
-
-This script integrates the penalty strategies into the DOF-LSTM neural network developed by Vega (2024).
-
-### Data
-
-The LSTM integration uses a different dataset than the reservoir optimizer. It requires the USIBWC discharge CSV file with columns for timestamp and discharge value in TCM.
-
-### Setup
-
-Upload the discharge CSV to Colab. Update the file path in `lstm_penalty_integration.py`:
-
-```python
-DATA_FILE = '/content/DataSetExport-Discharge_Total_Last-24-Hour-Change-in-Storage_08450800-Instantaneous-TCM-20240622194957.csv'
-```
-
-### Run
-
-```
-python lstm_penalty_integration.py
-```
-
-### What it does
-
-The script trains the DOF-LSTM five times, each with a different penalty strategy:
-- No penalty (baseline)
-- Fixed lambda = 5
-- Progressive (lambda multiplied by 10 every 10 epochs)
-- Adaptive (lambda adjusted based on violation trend)
-- Learnable (lambda computed by online controller)
-
-All experiments use the same random seed for fair comparison.
-
-### Output
-
-The script prints a comparison table showing MSE, violation count, violation severity, and maximum lambda for each strategy. It also saves a four-panel plot (`lstm_penalty_comparison.png`) showing predictions, lambda evolution, violation counts, and training loss curves.
-
-## Penalty Strategies
-
-The tool implements four penalty update strategies. All share the same augmented objective:
-
-```
-F(x) = f(x) + lambda * P(x)
-```
-
-where f(x) is the original objective, P(x) is the penalty function (zero when feasible, positive when constraints are violated), and lambda controls the trade-off.
-
-**Baseline Progressive**: Lambda starts at 1 and is multiplied by 10 at fixed intervals. Simple and predictable but does not adapt to the problem.
-
-**Adaptive**: Lambda is adjusted based on how fast violations are decreasing. If violations drop fast, lambda increases gently (x2). If violations drop slowly, lambda increases moderately (x3). If violations are stuck, lambda increases aggressively (x10).
-
-**Constraint-Aware Gradients**: Normalizes objective and penalty gradients to unit length and blends them with a feasibility-dependent weight. This strategy was found to be counterproductive and is not recommended. It is included for completeness and as a documented negative finding.
-
-**Learnable**: An online controller computes lambda based on three signals: current violation severity, violation trend, and budget progress. The controller's weights are updated during optimization based on observed outcomes.
-
-Two penalty formulations are supported:
-- L1 (linear hinge): constant gradient at the constraint boundary. Recommended for inequality constraints.
-- L2 (quadratic hinge): gradient proportional to violation magnitude. Smoother but loses enforcement power near the boundary.
+---
 
 ## File Structure
 
 ```
-reservoir-optimization/
-    README.md
-    reservoir_optimization_v4.py    # Standalone optimizer
-    generate_realpaver.py           # RealPaver constraint file generator
-    reservoir_metaloop_poc.py       # Meta-loop: optimizer + RealPaver + coordinator
-    lstm_penalty_integration.py     # LSTM + penalty integration
-    data/                           # Place your CSV files here
-        hydropower_hourly.csv
-        hourly_evaporation_empirical_overwater_updated.csv
+reservoir-optimizer/
+├── app.py                          # Streamlit web app (main entry point)
+├── reservoir_optimization_v4.py    # Core model, optimizer, and data loading
+├── generate_realpaver.py           # Generates RealPaver constraint files
+├── setup.bat                       # First-time setup script
+├── run.bat                         # Launch script
+├── requirements.txt                # Python package dependencies
+├── data/
+│   ├── hydropower_hourly.csv
+│   └── hourly_evaporation_empirical_overwater_updated.csv
+├── Realpaver/
+│   ├── realpaver.exe               # RealPaver solver binary
+│   ├── reservoir_window_0.txt      # Example constraint file (window 0)
+│   └── reservoir_window_0_results.txt  # Example RealPaver output
+└── legacy_optimizer/               # Original research scripts
+    ├── README.md                   # Documentation for the legacy scripts
+    ├── reservoir_metaloop_poc.py   # Meta-loop proof of concept
+    └── lstm_penalty_integration.py # LSTM + penalty experiment
 ```
 
-## Constraints Reference
+---
 
-The optimizer enforces the following constraints (75 total per 24-hour window):
+## Troubleshooting
 
-| ID | Constraint | Count | Description |
-|----|-----------|-------|-------------|
-| C1 | Release minimum | 24 | Discharge >= 2.0 m^3/s (environmental flow) |
-| C2 | Release maximum | 24 | Discharge <= 273.0 m^3/s (turbine capacity) |
-| C3 | Level bounds | 48 | Reservoir level within +/- 1.5 m of starting level |
-| C4 | Demand | 2 | Total daily release within +/- 20% of historical |
-| C5 | Min generation | 1 | Total power >= 50% of historical |
-| C6 | Ramp rate | 23 | Consecutive hour discharge change <= 60 m^3/s |
-| C7 | End storage | 1 | End-of-day storage within +/- 5,000 TCM of start |
+**App does not open / "Module not found" error**  
+Run `setup.bat` to install dependencies. Then use `run.bat` to launch — it activates the virtual environment automatically.
 
-Note: C1 and C2 are enforced via variable bounds (clipping after each gradient step), not via the penalty function. C3 through C7 are enforced via the penalty function.
+**"File not found" error on startup**  
+Make sure `hydropower_hourly.csv` and `hourly_evaporation_empirical_overwater_updated.csv` are in the `data/` folder.
+
+**Solution is infeasible**  
+Try one or more of:
+- Switch from **Baseline** to **Adaptive** or **Learnable** method
+- Widen the **Level band** (e.g., 2.0 m instead of 1.5 m)
+- Increase the **Demand tolerance** (e.g., 30%)
+- Increase the **Max ramp rate** (e.g., 60 m³/s)
+- Upload a RealPaver warm start file
+
+**Optimization takes very long**  
+The default 8,000 iterations takes 20–40 seconds. This is normal. **Learnable** is the slowest method; try **Adaptive** for faster results.
+
+**RealPaver file upload fails**  
+Make sure you are uploading the RealPaver *output* file (contains `OUTER BOX` sections), not the input constraint file. The output file is typically UTF-16 encoded.
+
+---
 
 ## Citation
 
 If you use this tool in your research, please cite:
 
 ```
-Trejo, E. (2026). Penalty Approach to Constrained Optimization Problems 
-in Water Reservoir and Energy Generation Management. Master's thesis, 
+Trejo, E. (2026). Penalty Approach to Constrained Optimization Problems
+in Water Reservoir and Energy Generation Management. Master's thesis,
 University of Texas at El Paso.
 ```
 

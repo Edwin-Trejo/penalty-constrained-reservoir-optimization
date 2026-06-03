@@ -1,0 +1,25 @@
+/* 
+(Problem inspired from the intersection of circles example from RealPaver User's Manual page 12)
+ Problem:
+ Find all points (x, y) on a circle centered at (x0, y0) with radius R
+ whose distance from the origin is exactly D.
+*/
+
+Branch number = 10;
+
+Constants
+  x0 = 2,
+  y0 = 1,
+  R  = 1.25,
+  D  = 2.75
+;
+
+Variables
+  x in [0.75, 2.75],
+  y in [-0.25, 2.25]
+;
+
+Constraints
+  (x - x0)^2 + (y - y0)^2 = R^2,
+  x^2 + y^2 = D^2
+;

@@ -1,0 +1,26 @@
+
+RealPaver v. 0.4 (c) LINA 2004
+
+INITIAL BOX
+  z1 in [-1000 , +1000]
+  z2 in [-1000 , +1000]
+  z3 in [-1000 , +1000]
+
+OUTER BOX 1
+  z1 in [124.7643488370932 , 124.7643488370934]
+  z2 in [25.28546066708894 , 25.28546066708898]
+  z3 in [224.6935300130224 , 224.6935300130227]
+
+  precision: 2.56e-13, elapsed time: 10 ms
+
+OUTER BOX 2
+  z1 in [131.7475644308769 , 131.7475644403561]
+  z2 in [-24.62787829918984 , -24.62787829860991]
+  z3 in [212.9030823228049 , 212.9030823233716]
+
+  precision: 9.48e-09, elapsed time: 20 ms
+
+END OF SOLVING
+  Property:     reliable process (no solution is lost)
+  Elapsed time: 20 ms
+

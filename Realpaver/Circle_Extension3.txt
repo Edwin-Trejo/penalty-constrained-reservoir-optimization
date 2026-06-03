@@ -1,0 +1,37 @@
+/* 
+(Problem inspired from the intersection of circles example from RealPaver User's Manual page 12)
+ Base Problem:
+ Find all points (x, y) on a circle centered at (x0, y0) with radius R
+ whose distance from the origin is EXACTLY D.
+
+ Extension 1 Inequality Distance Constraint
+ Find all points (x, y) on the same circle whose distance to the origin is AT MOST D.
+
+ Extension 2 Turn the circle into a filled disk
+ Find all point (x, y) that lie in the intersection of two disks.
+ Disk A centered at (x0, y0) with radius R
+ Disk B centered at (0,0) with radius D
+
+Extension 3 Uncertain parameters (constants changed to intervals)
+
+*/
+
+Branch number = 20; /*Using 20 boxes */
+
+
+Variables
+  /* Unknown point */
+  x  in ]-oo, +oo[,
+  y  in ]-oo, +oo[,
+
+  /* Interval parameters (formerly "constants") */
+  x0 in [1.90, 2.10],
+  y0 in [0.90, 1.10],
+  R  in [1.20, 1.30],
+  D  in [2.70, 2.80]
+;
+
+Constraints
+  (x - x0)^2 + (y - y0)^2 <= R^2, /*Inside or on the shifted disk */
+  x^2 + y^2 <= D^2    /* inside or on the origin-centered disk */
+;
